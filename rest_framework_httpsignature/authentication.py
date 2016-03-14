@@ -1,6 +1,6 @@
 from rest_framework import authentication
 from rest_framework import exceptions
-from httpsig import HeaderSigner
+from httpsig import HeaderSigner, HeaderVerifier
 import re
 
 
@@ -11,6 +11,22 @@ class SignatureAuthentication(authentication.BaseAuthentication):
 
     API_KEY_HEADER = 'X-Api-Key'
     ALGORITHM = 'hmac-sha256'
+    REQUIRED_HEADERS = ['date',]
+
+    def get_request_headers(self,META):
+        import re
+        regex_http_          = re.compile(r'^HTTP_.+$')
+        regex_content_type   = re.compile(r'^CONTENT_TYPE$')
+        regex_content_length = re.compile(r'^CONTENT_LENGTH$')
+
+        request_headers = {}
+        for header in META:
+            if regex_http_.match(header) \
+                    or regex_content_type.match(header) \
+                    or regex_content_length.match(header):
+                request_headers[header] = META[header]
+
+        return request_headers
 
     def get_signature_from_signature_string(self, signature):
         """Return the signature from the signature header or None."""
@@ -55,20 +71,7 @@ class SignatureAuthentication(authentication.BaseAuthentication):
             d[header] = request.META.get(self.header_canonical(header))
         return d
 
-    def build_signature(self, user_api_key, user_secret, request):
-        """Return the signature for the request."""
-        path = request.get_full_path()
-        sent_signature = request.META.get(
-            self.header_canonical('Authorization'))
-        signature_headers = self.get_headers_from_signature(sent_signature)
-        unsigned = self.build_dict_to_sign(request, signature_headers)
 
-        # Sign string and compare.
-        signer = HeaderSigner(
-            key_id=user_api_key, secret=user_secret,
-            headers=signature_headers, algorithm=self.ALGORITHM)
-        signed = signer.sign(unsigned, method=request.method, path=path)
-        return signed['authorization']
 
     def fetch_user_data(self, api_key):
         """Retuns (User instance, API Secret) or None if api_key is bad."""
@@ -95,11 +98,26 @@ class SignatureAuthentication(authentication.BaseAuthentication):
             raise exceptions.AuthenticationFailed('Bad API key')
 
         # Build string to sign from "headers" part of Signature value.
-        computed_string = self.build_signature(api_key, secret, request)
-        computed_signature = self.get_signature_from_signature_string(
-            computed_string)
+        path = request.get_full_path()
+        sent_signature = request.META.get(
+            self.header_canonical('Authorization'))
+        host = request.META.get(self.header_canonical('Host'))
+        signature_headers = self.get_headers_from_signature(sent_signature)
+        unsigned = self.build_dict_to_sign(request, signature_headers)
 
-        if computed_signature != sent_signature:
+        unsigned.update({'authorization': sent_string})
+
+        #unsigned['date'] = unsigned['date'] + 'd'
+
+        hv = HeaderVerifier(headers=unsigned,
+                            secret=secret,
+                            required_headers=self.REQUIRED_HEADERS,
+                            method=request.method,
+                            path=path,
+                            host=host)
+        res = hv.verify()
+
+        if not hv.verify():
             raise exceptions.AuthenticationFailed('Bad signature')
 
         return (user, api_key)
