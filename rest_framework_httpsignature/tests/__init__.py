@@ -1,1 +1,1 @@
-from .signature import *
+from signature import *
