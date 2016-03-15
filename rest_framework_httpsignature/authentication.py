@@ -10,29 +10,22 @@ class SignatureAuthentication(authentication.BaseAuthentication):
 
     SIGNATURE_RE = re.compile('signature="(.+?)"')
     SIGNATURE_HEADERS_RE = re.compile('headers="([\(\)\sa-z0-9-]+?)"')
+    KEYID_RE = re.compile('.*keyId="(.*?)".*')
 
     API_KEY_HEADER = 'X-Api-Key'
     ALGORITHM = 'hmac-sha256'
-    REQUIRED_HEADERS = ['date',]
-
-    def get_request_headers(self,META):
-        import re
-        regex_http_          = re.compile(r'^HTTP_.+$')
-        regex_content_type   = re.compile(r'^CONTENT_TYPE$')
-        regex_content_length = re.compile(r'^CONTENT_LENGTH$')
-
-        request_headers = {}
-        for header in META:
-            if regex_http_.match(header) \
-                    or regex_content_type.match(header) \
-                    or regex_content_length.match(header):
-                request_headers[header] = META[header]
-
-        return request_headers
+    REQUIRED_HEADERS = ['date']
 
     def get_signature_from_signature_string(self, signature):
         """Return the signature from the signature header or None."""
         match = self.SIGNATURE_RE.search(signature)
+        if not match:
+            return None
+        return match.group(1)
+
+    def get_keyid_from_auth_string(self, auth_header):
+        """Return the signature from the signature header or None."""
+        match = self.KEYID_RE.search(auth_header)
         if not match:
             return None
         return match.group(1)
@@ -93,18 +86,23 @@ class SignatureAuthentication(authentication.BaseAuthentication):
         return None
 
     def authenticate(self, request):
-        # Check for API key header.
-        api_key_header = self.header_canonical(self.API_KEY_HEADER)
-        api_key = request.META.get(api_key_header)
-        if not api_key:
-            return None
 
         # Check if request has a "Signature" request header.
         authorization_header = self.header_canonical('Authorization')
-        sent_string = request.META.get(authorization_header)
-        if not sent_string:
+        auth_string = request.META.get(authorization_header)
+        if not auth_string:
             raise exceptions.AuthenticationFailed('No signature provided')
-        sent_signature = self.get_signature_from_signature_string(sent_string)
+
+        # Check for API key header.
+        api_key = None
+        if self.ALGORITHM.lower().startswith('rsa'):
+            api_key = self.get_keyid_from_auth_string(auth_string)
+        else:
+            api_key_header = self.header_canonical(self.API_KEY_HEADER)
+            api_key = request.META.get(api_key_header)
+
+        if not api_key:
+            raise exceptions.AuthenticationFailed('No api key provided')
 
         # Fetch credentials for API key from the data store.
         try:
@@ -120,9 +118,10 @@ class SignatureAuthentication(authentication.BaseAuthentication):
         signature_headers = self.get_headers_from_signature(sent_signature)
         unsigned = self.build_dict_to_sign(request, signature_headers)
 
-        unsigned.update({'authorization': sent_string})
+        unsigned.update({'authorization': auth_string})
 
         #unsigned['date'] = unsigned['date'] + 'd'
+
         try:
             hv = HeaderVerifier(headers=unsigned,
                                 secret=secret,
@@ -130,10 +129,13 @@ class SignatureAuthentication(authentication.BaseAuthentication):
                                 method=request.method,
                                 path=path,
                                 host=host)
-        except (HttpSigException, KeyError) as e:
+        except (HttpSigException, KeyError, Exception) as e:
             raise exceptions.AuthenticationFailed(str(e))
 
-        if not hv.verify():
-            raise exceptions.AuthenticationFailed('Bad signature')
+        try:
+            if not hv.verify():
+                raise exceptions.AuthenticationFailed('Bad signature')
+        except Exception as e:
+            raise exceptions.AuthenticationFailed(str(e))
 
         return (user, api_key)

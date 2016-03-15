@@ -166,8 +166,8 @@ class SignatureAuthenticationTestCase(TestCase):
 
     def test_no_credentials(self):
         request = RequestFactory().get(ENDPOINT)
-        res = self.auth.authenticate(request)
-        self.assertIsNone(res)
+        self.assertRaises(AuthenticationFailed,
+                          self.auth.authenticate, request)
 
     def test_only_api_key(self):
         request = RequestFactory().get(
