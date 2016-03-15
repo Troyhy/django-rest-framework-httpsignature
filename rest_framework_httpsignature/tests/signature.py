@@ -2,12 +2,13 @@ from django.test import SimpleTestCase, TestCase, RequestFactory
 from django.contrib.auth import get_user_model
 from rest_framework_httpsignature.authentication import SignatureAuthentication
 from rest_framework.exceptions import AuthenticationFailed
-import re
+import re, os
+
 User = get_user_model()
 
 ENDPOINT = '/api'
 METHOD = 'GET'
-KEYID = 'some-key'
+KEYID = 'somekey'
 SECRET = 'my secret string'
 SIGNATURE = 'some.signature'
 
@@ -24,7 +25,6 @@ def build_signature(headers, key_id=KEYID, signature=SIGNATURE):
 
 
 class HeadersUnitTestCase(SimpleTestCase):
-
     request = RequestFactory()
 
     def setUp(self):
@@ -68,7 +68,6 @@ class HeadersUnitTestCase(SimpleTestCase):
 
 
 class SignatureTestCase(SimpleTestCase):
-
     def setUp(self):
         self.auth = SignatureAuthentication()
 
@@ -104,7 +103,6 @@ class SignatureTestCase(SimpleTestCase):
 
 
 class BuildSignatureTestCase(SimpleTestCase):
-
     request = RequestFactory()
     KEYID = 'su-key'
 
@@ -141,7 +139,6 @@ class BuildSignatureTestCase(SimpleTestCase):
 
 
 class SignatureAuthenticationTestCase(TestCase):
-
     class APISignatureAuthentication(SignatureAuthentication):
         """Extend the SignatureAuthentication to test it."""
 
@@ -203,3 +200,114 @@ class SignatureAuthenticationTestCase(TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result[0], self.test_user)
         self.assertEqual(result[1], KEYID)
+
+
+class SignatureAuthenticationRSATestCase(TestCase):
+    class APISignatureAuthentication(SignatureAuthentication):
+        """Extend the SignatureAuthentication to test it.
+           TODO: CLEANUP this test code
+        """
+        ALGORITHM = 'rsa-sha256'
+
+        def __init__(self, user):
+            self.user = user
+
+        def fetch_user_data(self, api_key):
+            import os
+
+            if api_key != KEYID:
+                return None
+            public_key_path = os.path.join(os.path.dirname(__file__),
+                                           'public_key.pem')
+            with open(public_key_path, 'rb') as f:
+                public_key = f.read()
+            return (self.user, public_key)
+
+    TEST_USERNAME = 'test-user'
+    TEST_PASSWORD = 'test-password'
+
+    def setUp(self):
+        self.test_user = User(username=self.TEST_USERNAME)
+        self.test_user.set_password(self.TEST_PASSWORD)
+        self.auth = self.APISignatureAuthentication(self.test_user)
+
+    def test_rsa_pubkey_pass(self):
+
+        from httpsig.sign import HeaderSigner
+
+        private_key_path = os.path.join(os.path.dirname(__file__),
+                                        'private_key.pem')
+        with open(private_key_path, 'rb') as f:
+            private_key = f.read()
+
+        HOST = "example.com"
+        METHOD = "GET"
+        PATH = '/foo?param=value&pet=dog'
+        hs = HeaderSigner(key_id=KEYID, secret=private_key,
+                          algorithm=self.auth.ALGORITHM,
+                          headers=[
+                              '(request-target)',
+                              'host',
+                              'date',
+                              'content-type',
+                              'content-md5',
+                              'content-length'
+                          ])
+        unsigned = {
+            'Host': HOST,
+            'Date': 'Thu, 05 Jan 2012 21:31:40 GMT',
+            'Content-Type': 'application/json',
+            'Content-MD5': 'Sd/dVLAcvNLSq16eXua5uQ==',
+            'Content-Length': '18',
+        }
+        signed = hs.sign(unsigned, method=METHOD, path=PATH)
+
+        # convert headers to DJANGO format and create request
+        DJ_HEADERS = {}
+        for key, value in signed.iteritems():
+            DJ_HEADERS.update({self.auth.header_canonical(key): value})
+        request = RequestFactory().get(PATH, {}, **DJ_HEADERS)
+
+        result = self.auth.authenticate(request)
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0], self.test_user)
+        self.assertEqual(result[1], KEYID)
+
+    def test_rsa_pubkey_fail(self):
+
+        from httpsig.sign import HeaderSigner
+
+        private_key_path = os.path.join(os.path.dirname(__file__),
+                                        'private_key2.pem')
+        with open(private_key_path, 'rb') as f:
+            private_key = f.read()
+
+        HOST = "example.com"
+        METHOD = "GET"
+        PATH = '/foo?param=value&pet=dog'
+        hs = HeaderSigner(key_id=KEYID, secret=private_key,
+                          algorithm=self.auth.ALGORITHM,
+                          headers=[
+                              '(request-target)',
+                              'host',
+                              'date',
+                              'content-type',
+                              'content-md5',
+                              'content-length'
+                          ])
+        unsigned = {
+            'Host': HOST,
+            'Date': 'Thu, 05 Jan 2012 21:31:40 GMT',
+            'Content-Type': 'application/json',
+            'Content-MD5': 'Sd/dVLAcvNLSq16eXua5uQ==',
+            'Content-Length': '18',
+        }
+        signed = hs.sign(unsigned, method=METHOD, path=PATH)
+
+        # convert headers to DJANGO format and create request
+        DJ_HEADERS = {}
+        for key, value in signed.iteritems():
+            DJ_HEADERS.update({self.auth.header_canonical(key): value})
+        request = RequestFactory().get(PATH, {}, **DJ_HEADERS)
+        self.assertRaises(AuthenticationFailed,
+                          self.auth.authenticate, request)
