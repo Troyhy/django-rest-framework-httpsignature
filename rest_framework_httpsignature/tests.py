@@ -3,7 +3,6 @@ from django.contrib.auth import get_user_model
 from rest_framework_httpsignature.authentication import SignatureAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 import re
-
 User = get_user_model()
 
 ENDPOINT = '/api'

@@ -1,6 +1,8 @@
 from rest_framework import authentication
 from rest_framework import exceptions
 from httpsig import HeaderSigner, HeaderVerifier
+from httpsig.utils import HttpSigException
+
 import re
 
 
@@ -71,7 +73,20 @@ class SignatureAuthentication(authentication.BaseAuthentication):
             d[header] = request.META.get(self.header_canonical(header))
         return d
 
+    def build_signature(self, user_api_key, user_secret, request):
+        """Return the signature for the request."""
+        path = request.get_full_path()
+        sent_signature = request.META.get(
+            self.header_canonical('Authorization'))
+        signature_headers = self.get_headers_from_signature(sent_signature)
+        unsigned = self.build_dict_to_sign(request, signature_headers)
 
+        # Sign string and compare.
+        signer = HeaderSigner(
+            key_id=user_api_key, secret=user_secret,
+            headers=signature_headers, algorithm=self.ALGORITHM)
+        signed = signer.sign(unsigned, method=request.method, path=path)
+        return signed['authorization']
 
     def fetch_user_data(self, api_key):
         """Retuns (User instance, API Secret) or None if api_key is bad."""
@@ -108,14 +123,15 @@ class SignatureAuthentication(authentication.BaseAuthentication):
         unsigned.update({'authorization': sent_string})
 
         #unsigned['date'] = unsigned['date'] + 'd'
-
-        hv = HeaderVerifier(headers=unsigned,
-                            secret=secret,
-                            required_headers=self.REQUIRED_HEADERS,
-                            method=request.method,
-                            path=path,
-                            host=host)
-        res = hv.verify()
+        try:
+            hv = HeaderVerifier(headers=unsigned,
+                                secret=secret,
+                                required_headers=self.REQUIRED_HEADERS,
+                                method=request.method,
+                                path=path,
+                                host=host)
+        except (HttpSigException, KeyError) as e:
+            raise exceptions.AuthenticationFailed(str(e))
 
         if not hv.verify():
             raise exceptions.AuthenticationFailed('Bad signature')
