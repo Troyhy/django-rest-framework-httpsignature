@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from rest_framework_httpsignature.authentication import SignatureAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 import re, os
+import six
 
 User = get_user_model()
 
@@ -134,7 +135,7 @@ class BuildSignatureTestCase(SimpleTestCase):
         signature_string = self.auth.build_signature(
             self.KEYID, SECRET, req)
         signature = re.match(
-            '.*signature="(.+)",?.*', signature_string).group(1)
+            '.*signature="(.+?)"', signature_string).group(1)
         self.assertEqual(expected_signature, signature)
 
 
@@ -264,7 +265,7 @@ class SignatureAuthenticationRSATestCase(TestCase):
 
         # convert headers to DJANGO format and create request
         DJ_HEADERS = {}
-        for key, value in signed.iteritems():
+        for key, value in six.iteritems(signed):
             DJ_HEADERS.update({self.auth.header_canonical(key): value})
         request = RequestFactory().get(PATH, {}, **DJ_HEADERS)
 
@@ -306,7 +307,7 @@ class SignatureAuthenticationRSATestCase(TestCase):
 
         # convert headers to DJANGO format and create request
         DJ_HEADERS = {}
-        for key, value in signed.iteritems():
+        for key, value in six.iteritems(signed):
             DJ_HEADERS.update({self.auth.header_canonical(key): value})
         request = RequestFactory().get(PATH, {}, **DJ_HEADERS)
         self.assertRaises(AuthenticationFailed,
